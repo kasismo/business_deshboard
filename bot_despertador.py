@@ -2,7 +2,7 @@ import requests
 from datetime import datetime
 
 # REEMPLAZA ESTO con el enlace real de tu aplicación en Streamlit
-url_app = "https://tu-enlace-del-supermercado.streamlit.app"
+url_app = "https://businessdeshboard-k4evw29yrgwbtybueaygjm.streamlit.app"
 
 print(f"🤖 Iniciando protocolo de despertar a las {datetime.now()}...")
 
