@@ -57,7 +57,7 @@ def cargar_datos_sql():
             df['gastos'] = df['sales'] - df['profit']
         if 'order_date' in df.columns:
             df['order_date'] = pd.to_datetime(df['order_date'])
-            df['mes_año'] = df['order_date'].dt.strftime('%Y-%m')
+            df['mes_año_generado'] = df['order_date'].dt.strftime('%Y-%m')
         return df, {"fecha": "order_date", "valor": "sales", "gastos": "gastos", "ganancia": "profit", "categoria": "state", "filtro": "region"}
     except Exception as e:
         st.error("Error conectando a la base de datos principal.")
