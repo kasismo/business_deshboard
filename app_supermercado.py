@@ -21,19 +21,18 @@ def entender_columnas_con_ia(lista_de_columnas):
         modelo = genai.GenerativeModel('gemini-1.5-flash', generation_config=configuracion)
         
         prompt = f"""
-        Eres un analista de datos. Analiza esta lista exacta de columnas de un dataset:
-        {lista_de_columnas}
+        Eres un analista de datos. Analiza esta lista de columnas: {lista_de_columnas}
         
-        Debes mapear qué columna original sirve para cada métrica del dashboard. 
+        Mapea qué columna sirve para cada métrica. NO busques coincidencias exactas, usa tu comprensión semántica para deducir el significado. 
         Reglas estrictas de búsqueda:
-        - "fecha": Busca algo como Order Date, Ship Date, Fecha, Date.
-        - "valor": Busca algo como Sales, Ventas, Ingresos, Total.
-        - "gastos": Busca algo como Costos, Gastos, Discount (si no hay, null).
-        - "ganancia": Busca algo como Profit, Ganancia, Margen.
-        - "categoria": Busca algo como Category, State, Segment, Sub-Category, Ciudad.
-        - "filtro": Busca algo como Region, Country, Pais.
+        - "fecha": Cualquier columna referida a tiempo (día, mes, date, fecha, timestamp, creado, enviado).
+        - "valor": El principal indicador de ingreso de dinero (sales, ventas, ingresos, facturacion, total).
+        - "gastos": Cualquier concepto de salida de dinero o descuentos (costos, gastos, discount, egresos).
+        - "ganancia": Dinero neto a favor (profit, ganancia, margen, neto).
+        - "categoria": Segmentaciones o lugares (category, state, ciudad, segmento, producto, tipo).
+        - "filtro": Agrupaciones geográficas macro (region, pais, continente).
         
-        Tu respuesta DEBE tener siempre estas 6 claves. Si no encuentras coincidencia, el valor debe ser null.
+        Responde estrictamente con un JSON usando estas 6 claves. Si absolutamente nada encaja semánticamente, usa null.
         """
         
         respuesta = modelo.generate_content(prompt)
