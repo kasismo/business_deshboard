@@ -1,36 +1,70 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
-import time 
+import time
+import google.generativeai as genai
+import json
 
 # 1. Configuramos la página 
 st.set_page_config(page_title="Superstore Analytics", page_icon="🛒", layout="wide")
-st.title("💸 Superstore Analytics - Panel Financiero")
-st.markdown("Analiza la base de datos centralizada en la nube, o sube tu propio reporte para generar un panel interactivo al instante.")
+st.title("💸 Superstore Analytics - Panel Financiero con IA")
+st.markdown("Sube tu reporte de ventas. Nuestro motor de Inteligencia Artificial entenderá tus columnas automáticamente y generará el panel interactivo.")
 st.divider()
 
-# 2. Función para cargar los datos DIRECTO DESDE MySQL (El Plan de Respaldo)
+# --- NUEVO: FUNCIÓN CEREBRO (GEMINI) ---
+def entender_columnas_con_ia(lista_de_columnas):
+    try:
+        # Conectamos con tu llave secreta
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        modelo = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        Eres un analista de datos experto. Tengo un archivo con estas columnas: {lista_de_columnas}.
+        Identifica cuál columna sirve para cada propósito:
+        1. 'fecha': Una columna que represente tiempo (fechas, meses, años, order date).
+        2. 'valor': Una columna numérica que represente dinero (ventas, ingresos, sales, total).
+        3. 'gastos': Una columna numérica de costos o gastos (opcional, si hay profit/ganancia, el gasto se calcula, pero si hay una de gasto directo, márcala).
+        4. 'ganancia': Una columna de ganancia neta o profit.
+        5. 'categoria': Una columna geográfica o de segmento (región, estado, ciudad, categoría, producto).
+        6. 'filtro': Una columna para filtrar geográficamente a nivel macro (como Región o País).
+        
+        Responde ÚNICAMENTE con un JSON válido, sin texto adicional ni bloques markdown. Ejemplo:
+        {{"fecha": "Order Date", "valor": "Sales", "gastos": null, "ganancia": "Profit", "categoria": "State", "filtro": "Region"}}
+        Si no encuentras coincidencia, pon null.
+        """
+        
+        respuesta = modelo.generate_content(prompt)
+        texto_limpio = respuesta.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(texto_limpio)
+    except Exception as e:
+        # Si la API falla por límite de red u otro motivo, devolvemos un mapa vacío seguro
+        return {"fecha": None, "valor": None, "gastos": None, "ganancia": None, "categoria": None, "filtro": None}
+
+# 2. Función para cargar datos SQL (Plan de respaldo)
 @st.cache_data
 def cargar_datos_sql():
     try:
         conexion_sql = create_engine(st.secrets["DB_URI"])
-        query = "SELECT * FROM registro_ventas"
-        df = pd.read_sql(query, con=conexion_sql)
-        # Estandarizamos columnas por precaución
+        df = pd.read_sql("SELECT * FROM registro_ventas", con=conexion_sql)
+        # Convertimos a minúsculas solo para el de SQL por comodidad
         df.columns = df.columns.str.lower().str.replace(' ', '_')
         if 'sales' in df.columns and 'profit' in df.columns:
             df['gastos'] = df['sales'] - df['profit']
         if 'order_date' in df.columns:
             df['order_date'] = pd.to_datetime(df['order_date'])
             df['mes_año'] = df['order_date'].dt.strftime('%Y-%m')
-        return df
+        return df, {"fecha": "order_date", "valor": "sales", "gastos": "gastos", "ganancia": "profit", "categoria": "state", "filtro": "region"}
     except Exception as e:
-        st.error(f"Error conectando a la base de datos principal: {e}")
-        return pd.DataFrame()
+        st.error("Error conectando a la base de datos principal.")
+        return pd.DataFrame(), {}
 
 # --- 3. LÓGICA DE CARGA DINÁMICA DE ARCHIVOS ---
-st.subheader("📁 Modo Dinámico (Opcional)")
-uploaded_file = st.file_uploader("Sube un nuevo dataset (CSV o Excel). El dashboard se adaptará automáticamente a los datos disponibles.", type=['csv', 'xlsx'])
+st.subheader("📁 Análisis Asistido por IA")
+uploaded_file = st.file_uploader("Sube un CSV o Excel. La Inteligencia Artificial mapeará tus datos.", type=['csv', 'xlsx'])
+
+# Variables de estado
+df_ventas = pd.DataFrame()
+mapa_ia = {}
 
 if uploaded_file is not None:
     with st.container():
@@ -38,114 +72,119 @@ if uploaded_file is not None:
         barra_progreso = col_prog.progress(0)
         texto_estado = col_status.empty()
         
-        texto_estado.text("🔍 Leyendo estructura del archivo...")
-        time.sleep(0.5)
-        barra_progreso.progress(30)
+        texto_estado.text("🔍 Leyendo archivo...")
+        time.sleep(0.3)
+        barra_progreso.progress(20)
         
         try:
             if uploaded_file.name.endswith('.csv'):
-                # Añadimos encoding por si el CSV viene de un Windows en español
                 df_ventas = pd.read_csv(uploaded_file, encoding='latin1') 
             else:
                 df_ventas = pd.read_excel(uploaded_file)
             
-            # --- MAGIA LIMPIADORA: Normalizamos columnas ---
-            # Convierte 'Order Date' a 'order_date', 'SALES' a 'sales', etc.
-            df_ventas.columns = df_ventas.columns.str.lower().str.replace(' ', '_')
+            texto_estado.text("🧠 Consultando IA semántica...")
+            barra_progreso.progress(50)
             
-            texto_estado.text("⚙️ Evaluando datos y adaptando gráficos...")
-            time.sleep(0.6)
-            barra_progreso.progress(70)
+            # --- AQUÍ OCURRE LA MAGIA ---
+            columnas_reales = list(df_ventas.columns)
+            mapa_ia = entender_columnas_con_ia(columnas_reales)
             
-            # Intentamos calcular métricas derivadas solo si existen sus bases
-            if 'sales' in df_ventas.columns and 'profit' in df_ventas.columns:
-                df_ventas['gastos'] = df_ventas['sales'] - df_ventas['profit']
+            texto_estado.text("⚙️ Construyendo panel inteligente...")
+            barra_progreso.progress(80)
             
-            if 'order_date' in df_ventas.columns:
-                df_ventas['order_date'] = pd.to_datetime(df_ventas['order_date'], errors='coerce')
-                df_ventas['mes_año'] = df_ventas['order_date'].dt.strftime('%Y-%m')
+            # Procesamos fechas si la IA encontró una
+            col_fecha = mapa_ia.get('fecha')
+            if col_fecha and col_fecha in df_ventas.columns:
+                df_ventas[col_fecha] = pd.to_datetime(df_ventas[col_fecha], errors='coerce')
+                df_ventas['mes_año_generado'] = df_ventas[col_fecha].dt.strftime('%Y-%m')
             
+            # Calculamos gastos si no existen, pero sí hay ventas y ganancias
+            col_valor = mapa_ia.get('valor')
+            col_ganancia = mapa_ia.get('ganancia')
+            col_gastos = mapa_ia.get('gastos')
+            
+            if col_valor and col_ganancia and not col_gastos:
+                df_ventas['gastos_calculados'] = df_ventas[col_valor] - df_ventas[col_ganancia]
+                mapa_ia.update({'gastos': 'gastos_calculados'})
+                
             barra_progreso.progress(100)
-            texto_estado.text("✅ Panel Generado Exitosamente")
-            st.success("Visualizando datos del archivo temporal. La conexión a la base de datos SQL está en pausa.")
+            texto_estado.text("✅ Panel Generado")
             
         except Exception as e:
-            barra_progreso.empty()
-            texto_estado.empty()
-            st.error(f"❌ Ocurrió un error al procesar tu archivo. Detalles: {e}")
+            st.error(f"Error procesando archivo: {e}")
             st.stop()
 else:
-    # --- Si NO hay archivo, usamos SQL silenciosamente ---
-    st.info("💡 Mostrando información en vivo desde PostgreSQL. Sube un archivo arriba para iniciar el Modo Dinámico.")
-    df_ventas = cargar_datos_sql()
+    # Si NO hay archivo, usamos SQL
+    st.info("💡 Mostrando información desde PostgreSQL. Sube un archivo para activar el análisis por IA.")
+    df_ventas, mapa_ia = cargar_datos_sql()
 
-# Si no hay datos (por error de SQL y no hay archivo), detenemos todo
-if df_ventas.empty:
+if df_ventas.empty or not mapa_ia:
     st.stop()
 
 st.divider()
 
-# --- 4. PANEL DE CONTROL (ADAPTABLE) ---
-st.sidebar.header("⚙️ Panel de Control")
+# --- 4. PANEL DE CONTROL (Adaptado por IA) ---
+st.sidebar.header("⚙️ Filtros Inteligentes")
 
 region_seleccionada = "Datos Globales"
-if 'region' in df_ventas.columns:
-    lista_regiones = ["Todas las Regiones"] + list(df_ventas['region'].dropna().unique())
-    region_seleccionada = st.sidebar.selectbox("📍 Selecciona una Región:", lista_regiones)
+col_filtro = mapa_ia.get('filtro')
 
-    if region_seleccionada != "Todas las Regiones":
-        df_ventas = df_ventas[df_ventas['region'] == region_seleccionada]
+if col_filtro and col_filtro in df_ventas.columns:
+    lista_regiones = ["Todos"] + list(df_ventas[col_filtro].dropna().unique())
+    region_seleccionada = st.sidebar.selectbox(f"📍 Filtrar por {col_filtro}:", lista_regiones)
+
+    if region_seleccionada != "Todos":
+        df_ventas = df_ventas[df_ventas[col_filtro] == region_seleccionada]
 else:
-    st.sidebar.info("📌 El dataset no contiene la columna 'region' para filtrar.")
+    st.sidebar.info("La IA no detectó categorías macro para filtrar.")
 
-# --- 5. TARJETAS DE MÉTRICAS (ADAPTABLES) ---
-st.subheader(f"📊 Resumen de {region_seleccionada}")
+# --- 5. TARJETAS DE MÉTRICAS (Adaptadas por IA) ---
+st.subheader(f"📊 Resumen: {region_seleccionada}")
 
-# Creamos una lista dinámica para poner solo las tarjetas que el archivo permite
 metricas = []
-if 'sales' in df_ventas.columns:
-    metricas.append(("💰 Ventas Totales", df_ventas['sales'].sum()))
-if 'gastos' in df_ventas.columns:
-    metricas.append(("📉 Gastos Totales", df_ventas['gastos'].sum()))
-if 'profit' in df_ventas.columns:
-    metricas.append(("💎 Ganancia Neta", df_ventas['profit'].sum()))
+col_valor = mapa_ia.get('valor')
+col_gastos = mapa_ia.get('gastos')
+col_ganancia = mapa_ia.get('ganancia')
+
+if col_valor and col_valor in df_ventas.columns:
+    metricas.append(("💰 Ingresos Totales", df_ventas[col_valor].sum()))
+if col_gastos and col_gastos in df_ventas.columns:
+    metricas.append(("📉 Costos Operativos", df_ventas[col_gastos].sum()))
+if col_ganancia and col_ganancia in df_ventas.columns:
+    metricas.append(("💎 Beneficio Neto", df_ventas[col_ganancia].sum()))
 
 if metricas:
     cols = st.columns(len(metricas))
     for i, (titulo, valor) in enumerate(metricas):
         cols[i].metric(titulo, f"${valor:,.2f}")
 else:
-    st.warning("⚠️ No se detectaron columnas de Ventas ('sales') o Ganancias ('profit') en este archivo.")
+    st.warning("⚠️ La IA no detectó columnas de dinero para calcular métricas.")
 
 st.divider()
 
-# --- 6. GRÁFICOS INTERACTIVOS (ADAPTABLES) ---
+# --- 6. GRÁFICOS INTERACTIVOS (Adaptados por IA) ---
 columna_izq, columna_der = st.columns(2)
 
 with columna_izq:
     st.subheader("📈 Evolución Temporal")
-    if 'mes_año' in df_ventas.columns and 'sales' in df_ventas.columns:
-        # Mostramos gastos y profit en el gráfico solo si existen
-        columnas_grafico = ['sales']
-        if 'gastos' in df_ventas.columns: columnas_grafico.append('gastos')
-        if 'profit' in df_ventas.columns: columnas_grafico.append('profit')
+    col_fecha = mapa_ia.get('fecha')
+    
+    if col_fecha and 'mes_año_generado' in df_ventas.columns and col_valor:
+        columnas_grafico = [col_valor]
+        if col_gastos: columnas_grafico.append(col_gastos)
+        if col_ganancia: columnas_grafico.append(col_ganancia)
         
-        evolucion_mensual = df_ventas.groupby('mes_año')[columnas_grafico].sum()
-        st.line_chart(evolucion_mensual)
+        evolucion = df_ventas.groupby('mes_año_generado')[columnas_grafico].sum()
+        st.line_chart(evolucion)
     else:
-        st.info("ℹ️ Gráfico no disponible: El archivo no contiene una columna de Fechas ('order_date').")
+        st.info("ℹ️ Gráfico no disponible: La IA no encontró columnas de fecha y valor.")
 
 with columna_der:
-    st.subheader("🗺️ Ventas por Segmento/Estado")
-    # Si no hay 'state', intentamos ver si al menos hay 'segment' o 'category' para graficar algo
-    columna_agrupar = None
-    for col in ['state', 'category', 'segment']:
-        if col in df_ventas.columns:
-            columna_agrupar = col
-            break
-            
-    if columna_agrupar and 'sales' in df_ventas.columns:
-        ventas_agrupadas = df_ventas.groupby(columna_agrupar)['sales'].sum().sort_values(ascending=False).head(10)
+    col_cat = mapa_ia.get('categoria')
+    st.subheader(f"🗺️ Desglose por {col_cat if col_cat else 'Categoría'}")
+    
+    if col_cat and col_cat in df_ventas.columns and col_valor:
+        ventas_agrupadas = df_ventas.groupby(col_cat)[col_valor].sum().sort_values(ascending=False).head(10)
         st.bar_chart(ventas_agrupadas, color="#2ECC71")
     else:
-        st.info("ℹ️ Gráfico no disponible: Faltan columnas geográficas o categóricas.")
+        st.info("ℹ️ Gráfico no disponible: La IA no encontró una categoría para agrupar.")
