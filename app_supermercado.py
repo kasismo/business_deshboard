@@ -11,33 +11,38 @@ st.title("💸 Superstore Analytics - Panel Financiero con IA")
 st.markdown("Sube tu reporte de ventas. Nuestro motor de Inteligencia Artificial entenderá tus columnas automáticamente y generará el panel interactivo.")
 st.divider()
 
-# --- NUEVO: FUNCIÓN CEREBRO (GEMINI) ---
+# --- NUEVO: FUNCIÓN CEREBRO (GEMINI BLINDADO) ---
 def entender_columnas_con_ia(lista_de_columnas):
     try:
-        # Conectamos con tu llave secreta
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        modelo = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # EL TRUCO PRO: Forzamos a la API a devolver un JSON estricto
+        configuracion = genai.GenerationConfig(response_mime_type="application/json")
+        modelo = genai.GenerativeModel('gemini-1.5-flash', generation_config=configuracion)
         
         prompt = f"""
-        Eres un analista de datos experto. Tengo un archivo con estas columnas: {lista_de_columnas}.
-        Identifica cuál columna sirve para cada propósito:
-        1. 'fecha': Una columna que represente tiempo (fechas, meses, años, order date).
-        2. 'valor': Una columna numérica que represente dinero (ventas, ingresos, sales, total).
-        3. 'gastos': Una columna numérica de costos o gastos (opcional, si hay profit/ganancia, el gasto se calcula, pero si hay una de gasto directo, márcala).
-        4. 'ganancia': Una columna de ganancia neta o profit.
-        5. 'categoria': Una columna geográfica o de segmento (región, estado, ciudad, categoría, producto).
-        6. 'filtro': Una columna para filtrar geográficamente a nivel macro (como Región o País).
+        Eres un analista de datos. Analiza esta lista exacta de columnas de un dataset:
+        {lista_de_columnas}
         
-        Responde ÚNICAMENTE con un JSON válido, sin texto adicional ni bloques markdown. Ejemplo:
-        {{"fecha": "Order Date", "valor": "Sales", "gastos": null, "ganancia": "Profit", "categoria": "State", "filtro": "Region"}}
-        Si no encuentras coincidencia, pon null.
+        Debes mapear qué columna original sirve para cada métrica del dashboard. 
+        Reglas estrictas de búsqueda:
+        - "fecha": Busca algo como Order Date, Ship Date, Fecha, Date.
+        - "valor": Busca algo como Sales, Ventas, Ingresos, Total.
+        - "gastos": Busca algo como Costos, Gastos, Discount (si no hay, null).
+        - "ganancia": Busca algo como Profit, Ganancia, Margen.
+        - "categoria": Busca algo como Category, State, Segment, Sub-Category, Ciudad.
+        - "filtro": Busca algo como Region, Country, Pais.
+        
+        Tu respuesta DEBE tener siempre estas 6 claves. Si no encuentras coincidencia, el valor debe ser null.
         """
         
         respuesta = modelo.generate_content(prompt)
-        texto_limpio = respuesta.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(texto_limpio)
+        
+        # Como forzamos el mime_type, ya no hay que limpiar texto raro con .replace()
+        return json.loads(respuesta.text)
+        
     except Exception as e:
-        # Si la API falla por límite de red u otro motivo, devolvemos un mapa vacío seguro
+        st.error(f"🚨 Error de conexión o parsing con la IA: {e}")
         return {"fecha": None, "valor": None, "gastos": None, "ganancia": None, "categoria": None, "filtro": None}
 
 # 2. Función para cargar datos SQL (Plan de respaldo)
@@ -89,6 +94,9 @@ if uploaded_file is not None:
             columnas_reales = list(df_ventas.columns)
             mapa_ia = entender_columnas_con_ia(columnas_reales)
             
+            # --- LÍNEA DE DEBUGGING AQUÍ MISMO ---
+            st.write("🧠 Diagnóstico en vivo de la IA:", mapa_ia)
+            
             texto_estado.text("⚙️ Construyendo panel inteligente...")
             barra_progreso.progress(80)
             
@@ -122,6 +130,7 @@ if df_ventas.empty or not mapa_ia:
     st.stop()
 
 st.divider()
+
 
 # --- 4. PANEL DE CONTROL (Adaptado por IA) ---
 st.sidebar.header("⚙️ Filtros Inteligentes")
