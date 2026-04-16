@@ -40,35 +40,54 @@ def reparar_archivo_en_memoria(uploaded_file):
         
     return io.StringIO(texto_sano)
 
-# --- 3. CEREBRO IA (BLINDADO) ---
+# --- 3. CEREBRO IA (CON RED DE SEGURIDAD) ---
 def entender_columnas_con_ia(lista_de_columnas):
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        configuracion = genai.GenerationConfig(response_mime_type="application/json")
-        modelo = genai.GenerativeModel('gemini-1.5-flash', generation_config=configuracion)
+        # Quitamos la restricción de mime_type que bloqueaba la respuesta
+        modelo = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
         Eres un analista de datos. Analiza esta lista de columnas: {lista_de_columnas}
-        Mapea qué columna sirve para cada métrica usando tu comprensión semántica.
-        - "fecha": (día, mes, date, fecha, timestamp).
+        Mapea qué columna original sirve para cada métrica.
+        - "fecha": (día, mes, date, fecha, timestamp, order date).
         - "valor": (sales, ventas, ingresos, facturacion, total).
         - "gastos": (costos, gastos, discount, egresos).
         - "ganancia": (profit, ganancia, margen, neto).
         - "categoria": (category, state, ciudad, segmento, producto).
         - "filtro": (region, pais, continente).
         
-        Responde estrictamente con un JSON usando estas claves. Usa null si no hay coincidencias.
+        Responde ÚNICAMENTE con la estructura JSON. No agregues comillas markdown (```json).
+        Ejemplo exacto de tu respuesta:
+        {{"fecha": "Order Date", "valor": "Sales", "gastos": null, "ganancia": "Profit", "categoria": "State", "filtro": "Region"}}
         """
+        
         respuesta = modelo.generate_content(prompt)
         
-        if not respuesta.text or respuesta.text.strip() == "":
-            raise ValueError("La API devolvió un texto vacío.")
+        # Limpiamos el texto por si la IA se pone rebelde y manda markdown
+        texto_limpio = respuesta.text.replace('```json', '').replace('```', '').strip()
+        
+        if not texto_limpio:
+            raise ValueError("La IA devolvió texto vacío.")
             
-        return json.loads(respuesta.text)
+        return json.loads(texto_limpio)
         
     except Exception as e:
-        st.warning(f"⚠️ La IA no pudo mapear las columnas ({e}). Usando modo seguro.")
-        return {"fecha": None, "valor": None, "gastos": None, "ganancia": None, "categoria": None, "filtro": None}
+        # PLAN DE EMERGENCIA: Si la IA falla, no rompemos la app. 
+        # Intentamos buscar las columnas clásicas de Superstore nosotros mismos.
+        st.toast(f"⚠️ API de IA ocupada o fallando. Activando mapeo manual de emergencia.", icon="🛠️")
+        
+        # Convertimos las columnas a minúsculas temporalmente para buscar mejor
+        cols_lower = [c.lower() for c in lista_de_columnas]
+        
+        return {
+            "fecha": lista_de_columnas[cols_lower.index("order date")] if "order date" in cols_lower else None,
+            "valor": lista_de_columnas[cols_lower.index("sales")] if "sales" in cols_lower else None,
+            "gastos": lista_de_columnas[cols_lower.index("discount")] if "discount" in cols_lower else None,
+            "ganancia": lista_de_columnas[cols_lower.index("profit")] if "profit" in cols_lower else None,
+            "categoria": lista_de_columnas[cols_lower.index("state")] if "state" in cols_lower else None,
+            "filtro": lista_de_columnas[cols_lower.index("region")] if "region" in cols_lower else None
+        }
 
 # --- 4. FUNCIÓN SQL (CON EL BUGFIX DE LA FECHA) ---
 @st.cache_data
