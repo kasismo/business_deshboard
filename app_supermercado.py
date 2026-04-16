@@ -4,53 +4,78 @@ from sqlalchemy import create_engine
 import time
 import google.generativeai as genai
 import json
+import io
 
-# 1. Configuramos la página 
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Superstore Analytics", page_icon="🛒", layout="wide")
 st.title("💸 Superstore Analytics - Panel Financiero con IA")
-st.markdown("Sube tu reporte de ventas. Nuestro motor de Inteligencia Artificial entenderá tus columnas automáticamente y generará el panel interactivo.")
+st.markdown("Sube tu reporte de ventas. Nuestro motor curará los datos corruptos y la Inteligencia Artificial estructurará el panel automáticamente.")
 st.divider()
 
-# --- NUEVO: FUNCIÓN CEREBRO (GEMINI BLINDADO) ---
+# --- 2. EL REPARADOR EN MEMORIA ---
+def reparar_archivo_en_memoria(uploaded_file):
+    """
+    Lee los bytes crudos, intenta decodificar formatos conflictivos (Windows/Mac)
+    y devuelve un archivo 'sano' directamente en la RAM.
+    """
+    bytes_data = uploaded_file.getvalue()
+    
+    # Si es Excel (binario), lo pasamos limpio a la RAM
+    if uploaded_file.name.endswith(('.xlsx', '.xls')):
+        return io.BytesIO(bytes_data)
+        
+    # Si es CSV (texto), curamos la codificación
+    encodings_comunes = ['utf-8', 'latin1', 'windows-1252', 'iso-8859-1']
+    texto_sano = None
+    
+    for enc in encodings_comunes:
+        try:
+            texto_sano = bytes_data.decode(enc)
+            break 
+        except UnicodeDecodeError:
+            continue
+            
+    if not texto_sano:
+        raise ValueError("El archivo está demasiado corrupto para ser reparado.")
+        
+    return io.StringIO(texto_sano)
+
+# --- 3. CEREBRO IA (BLINDADO) ---
 def entender_columnas_con_ia(lista_de_columnas):
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        
-        # EL TRUCO PRO: Forzamos a la API a devolver un JSON estricto
         configuracion = genai.GenerationConfig(response_mime_type="application/json")
         modelo = genai.GenerativeModel('gemini-1.5-flash', generation_config=configuracion)
         
         prompt = f"""
         Eres un analista de datos. Analiza esta lista de columnas: {lista_de_columnas}
+        Mapea qué columna sirve para cada métrica usando tu comprensión semántica.
+        - "fecha": (día, mes, date, fecha, timestamp).
+        - "valor": (sales, ventas, ingresos, facturacion, total).
+        - "gastos": (costos, gastos, discount, egresos).
+        - "ganancia": (profit, ganancia, margen, neto).
+        - "categoria": (category, state, ciudad, segmento, producto).
+        - "filtro": (region, pais, continente).
         
-        Mapea qué columna sirve para cada métrica. NO busques coincidencias exactas, usa tu comprensión semántica para deducir el significado. 
-        Reglas estrictas de búsqueda:
-        - "fecha": Cualquier columna referida a tiempo (día, mes, date, fecha, timestamp, creado, enviado).
-        - "valor": El principal indicador de ingreso de dinero (sales, ventas, ingresos, facturacion, total).
-        - "gastos": Cualquier concepto de salida de dinero o descuentos (costos, gastos, discount, egresos).
-        - "ganancia": Dinero neto a favor (profit, ganancia, margen, neto).
-        - "categoria": Segmentaciones o lugares (category, state, ciudad, segmento, producto, tipo).
-        - "filtro": Agrupaciones geográficas macro (region, pais, continente).
-        
-        Responde estrictamente con un JSON usando estas 6 claves. Si absolutamente nada encaja semánticamente, usa null.
+        Responde estrictamente con un JSON usando estas claves. Usa null si no hay coincidencias.
         """
-        
         respuesta = modelo.generate_content(prompt)
         
-        # Como forzamos el mime_type, ya no hay que limpiar texto raro con .replace()
+        if not respuesta.text or respuesta.text.strip() == "":
+            raise ValueError("La API devolvió un texto vacío.")
+            
         return json.loads(respuesta.text)
         
     except Exception as e:
-        st.error(f"🚨 Error de conexión o parsing con la IA: {e}")
+        st.warning(f"⚠️ La IA no pudo mapear las columnas ({e}). Usando modo seguro.")
         return {"fecha": None, "valor": None, "gastos": None, "ganancia": None, "categoria": None, "filtro": None}
 
-# 2. Función para cargar datos SQL (Plan de respaldo)
+# --- 4. FUNCIÓN SQL (CON EL BUGFIX DE LA FECHA) ---
 @st.cache_data
 def cargar_datos_sql():
     try:
         conexion_sql = create_engine(st.secrets["DB_URI"])
         df = pd.read_sql("SELECT * FROM registro_ventas", con=conexion_sql)
-        # Convertimos a minúsculas solo para el de SQL por comodidad
         df.columns = df.columns.str.lower().str.replace(' ', '_')
         if 'sales' in df.columns and 'profit' in df.columns:
             df['gastos'] = df['sales'] - df['profit']
@@ -62,11 +87,10 @@ def cargar_datos_sql():
         st.error("Error conectando a la base de datos principal.")
         return pd.DataFrame(), {}
 
-# --- 3. LÓGICA DE CARGA DINÁMICA DE ARCHIVOS ---
-st.subheader("📁 Análisis Asistido por IA")
-uploaded_file = st.file_uploader("Sube un CSV o Excel. La Inteligencia Artificial mapeará tus datos.", type=['csv', 'xlsx'])
+# --- 5. LÓGICA DE CARGA DINÁMICA (EL PIPELINE) ---
+st.subheader("📁 Carga tu Base de Datos")
+uploaded_file = st.file_uploader("Formato soportado: CSV o Excel.", type=['csv', 'xlsx'])
 
-# Variables de estado
 df_ventas = pd.DataFrame()
 mapa_ia = {}
 
@@ -76,36 +100,35 @@ if uploaded_file is not None:
         barra_progreso = col_prog.progress(0)
         texto_estado = col_status.empty()
         
-        texto_estado.text("🔍 Leyendo archivo...")
-        time.sleep(0.3)
-        barra_progreso.progress(20)
-        
         try:
-            if uploaded_file.name.endswith('.csv'):
-                df_ventas = pd.read_csv(uploaded_file, encoding='latin1') 
-            else:
-                df_ventas = pd.read_excel(uploaded_file)
+            # ETAPA 1: EL REPARADOR
+            texto_estado.text("⚕️ Reparando estructura...")
+            time.sleep(0.3)
+            archivo_curado = reparar_archivo_en_memoria(uploaded_file)
+            barra_progreso.progress(25)
             
-            texto_estado.text("🧠 Consultando IA semántica...")
+            # ETAPA 2: DATA EXTRACCIÓN
+            texto_estado.text("📊 Construyendo Dataframe...")
+            if uploaded_file.name.endswith('.csv'):
+                df_ventas = pd.read_csv(archivo_curado) 
+            else:
+                df_ventas = pd.read_excel(archivo_curado)
             barra_progreso.progress(50)
             
-            # --- AQUÍ OCURRE LA MAGIA ---
+            # ETAPA 3: LA IA 
+            texto_estado.text("🧠 Consultando semántica...")
             columnas_reales = list(df_ventas.columns)
             mapa_ia = entender_columnas_con_ia(columnas_reales)
             
-            # --- LÍNEA DE DEBUGGING AQUÍ MISMO ---
-            st.write("🧠 Diagnóstico en vivo de la IA:", mapa_ia)
-            
-            texto_estado.text("⚙️ Construyendo panel inteligente...")
+            # ETAPA 4: MOTOR GRÁFICO
+            texto_estado.text("⚙️ Ensamblando panel...")
             barra_progreso.progress(80)
             
-            # Procesamos fechas si la IA encontró una
             col_fecha = mapa_ia.get('fecha')
             if col_fecha and col_fecha in df_ventas.columns:
                 df_ventas[col_fecha] = pd.to_datetime(df_ventas[col_fecha], errors='coerce')
                 df_ventas['mes_año_generado'] = df_ventas[col_fecha].dt.strftime('%Y-%m')
             
-            # Calculamos gastos si no existen, pero sí hay ventas y ganancias
             col_valor = mapa_ia.get('valor')
             col_ganancia = mapa_ia.get('ganancia')
             col_gastos = mapa_ia.get('gastos')
@@ -115,14 +138,15 @@ if uploaded_file is not None:
                 mapa_ia.update({'gastos': 'gastos_calculados'})
                 
             barra_progreso.progress(100)
-            texto_estado.text("✅ Panel Generado")
+            texto_estado.text("✅ Pipeline Ejecutado")
             
         except Exception as e:
-            st.error(f"Error procesando archivo: {e}")
+            barra_progreso.empty()
+            texto_estado.empty()
+            st.error(f"❌ Error crítico en el archivo: {e}")
             st.stop()
 else:
-    # Si NO hay archivo, usamos SQL
-    st.info("💡 Mostrando información desde PostgreSQL. Sube un archivo para activar el análisis por IA.")
+    st.info("💡 Mostrando información desde PostgreSQL.")
     df_ventas, mapa_ia = cargar_datos_sql()
 
 if df_ventas.empty or not mapa_ia:
@@ -130,8 +154,7 @@ if df_ventas.empty or not mapa_ia:
 
 st.divider()
 
-
-# --- 4. PANEL DE CONTROL (Adaptado por IA) ---
+# --- 6. PANEL DE CONTROL (Adaptable) ---
 st.sidebar.header("⚙️ Filtros Inteligentes")
 
 region_seleccionada = "Datos Globales"
@@ -146,7 +169,7 @@ if col_filtro and col_filtro in df_ventas.columns:
 else:
     st.sidebar.info("La IA no detectó categorías macro para filtrar.")
 
-# --- 5. TARJETAS DE MÉTRICAS (Adaptadas por IA) ---
+# --- 7. TARJETAS DE MÉTRICAS (Adaptables) ---
 st.subheader(f"📊 Resumen: {region_seleccionada}")
 
 metricas = []
@@ -170,7 +193,7 @@ else:
 
 st.divider()
 
-# --- 6. GRÁFICOS INTERACTIVOS (Adaptados por IA) ---
+# --- 8. GRÁFICOS INTERACTIVOS (Adaptables) ---
 columna_izq, columna_der = st.columns(2)
 
 with columna_izq:
