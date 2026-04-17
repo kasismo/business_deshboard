@@ -45,7 +45,7 @@ def entender_columnas_con_ia(lista_de_columnas):
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         # Quitamos la restricción de mime_type que bloqueaba la respuesta
-        modelo = genai.GenerativeModel('gemini-3-flash')
+        modelo = genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = f"""
         Eres un analista de datos. Analiza esta lista de columnas: {lista_de_columnas}
